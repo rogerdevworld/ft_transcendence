@@ -57,59 +57,101 @@
 
 ```text
 music-room-transcendence/
-├── .github/                    # CI básico (cargo check/clippy + npm run build)
-├── infra/                      # Infraestructura, Proxy y Seguridad (Roger)
-│   ├── nginx/                  # Configuración HTTPS + ModSecurity WAF (hardened) + proxy WS
-│   ├── vault/                  # Políticas, scripts de inicialización y config HashiCorp Vault
-│   └── postgres/               # Scripts de init de BD
-├── backend/                    # Rust + Axum + SeaORM + Tokio (Roger)
-│   ├── migration/              # Migraciones de SeaORM (tablas, relaciones, índices)
+├── .github/
+│   └── workflows/
+│       └── ci.yml                 # cargo check / clippy / test + npm run build
+├── infra/
+│   ├── nginx/
+│   │   ├── nginx.conf             # HTTPS + reverse proxy + WebSockets + SSE
+│   │   └── modsecurity/           # Reglas WAF endurecidas (ajustadas a WS/SSE)
+│   ├── vault/
+│   │   ├── config.hcl             # Config de HashiCorp Vault
+│   │   └── init-policies.sh       # Políticas y carga inicial de secretos
+│   └── postgres/
+│       └── init.sql               # Inicialización opcional / extensiones
+├── backend/
+│   ├── migration/                 # Crate de migraciones SeaORM (sea-orm-migration)
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       └── m20260101_000001_init.rs
 │   ├── src/
-│   │   ├── main.rs             # Punto de entrada Tokio, carga de secretos desde Vault, router Axum
-│   │   ├── config.rs           # Configuración tipada (env + Vault)
-│   │   ├── state.rs            # AppState compartido (DB pool, Redis, canales WS, HTTP client)
-│   │   ├── error.rs            # Manejo centralizado de errores HTTP/JSON (IntoResponse)
-│   │   ├── entities/           # Entidades SeaORM (User, Room, Track, Vote, Playlist, Message...)
-│   │   ├── middleware/         # JWT Auth, verificador suscripción Free/Paid, rate limit, logs
+│   │   ├── main.rs                # Arranque Tokio, Vault/config, pool DB/Redis, router, server
+│   │   ├── config.rs              # Config tipada (entorno + Vault)
+│   │   ├── state.rs               # AppState (SeaORM DatabaseConnection, Redis, WS hub, HTTP)
+│   │   ├── error.rs               # Error centralizado de app -> IntoResponse (HTTP + JSON)
+│   │   ├── entities/              # Entidades generadas/definidas con SeaORM
+│   │   │   ├── mod.rs
+│   │   │   ├── user.rs
+│   │   │   ├── friendship.rs
+│   │   │   ├── user_device.rs
+│   │   │   ├── music_room.rs
+│   │   │   ├── room_track.rs
+│   │   │   ├── track_vote.rs
+│   │   │   ├── playlist.rs
+│   │   │   ├── playlist_item.rs
+│   │   │   ├── control_delegation.rs
+│   │   │   ├── chat_message.rs
+│   │   │   └── audit_log.rs
+│   │   ├── middleware/
+│   │   │   ├── mod.rs
+│   │   │   ├── auth.rs            # Validación JWT / sesión
+│   │   │   ├── subscription.rs    # Comprobación plan FREE / PAID
+│   │   │   └── client_log.rs      # Registro de plataforma, dispositivo y versión app
 │   │   ├── routes/
-│   │   │   ├── auth.rs         # Registro, login (Argon2), JWT, OAuth 2.0 (Google/42)
-│   │   │   ├── users.rs        # Perfiles (público/amigos/privado), avatares, amigos, plan Free/Paid
-│   │   │   ├── rooms.rs        # Salas, Music Track Vote, Playlist Editor, Control Delegation
-│   │   │   ├── search.rs       # Búsqueda avanzada (filtros, ordenamiento, paginación) + Spotify API
-│   │   │   ├── chat.rs         # Historial de mensajes + hook de moderación IA
-│   │   │   └── ai.rs           # Recomendaciones ML + endpoint LLM en streaming (SSE)
-│   │   ├── ws/
-│   │   │   ├── hub.rs          # Gestor concurrente de salas y conexiones (DashMap / RwLock)
-│   │   │   └── handler.rs      # Eventos tiempo real (votos, reordenar playlist, delegar control, chat)
-│   │   └── services/
-│   │       ├── spotify.rs      # Cliente Spotify Web API (solo lectura metadatos/previews)
-│   │       ├── recommender.rs  # Lógica de recomendación (similitud coseno / scoring)
-│   │       └── llm.rs          # Cliente streaming hacia API LLM + moderación
+│   │   │   ├── mod.rs
+│   │   │   ├── auth.rs            # Registro, login (Argon2), JWT, OAuth2 (Google / 42)
+│   │   │   ├── users.rs           # Perfil, visibilidad (público/amigos/privado), amigos, plan
+│   │   │   ├── rooms.rs           # Salas, votos, playlist colaborativa, delegación control
+│   │   │   ├── search.rs          # Búsqueda avanzada (filtros, orden, paginación) + catálogo
+│   │   │   ├── chat.rs            # Mensajes de sala/directos + moderación
+│   │   │   └── ai.rs              # Recomendaciones ML + streaming SSE del LLM
+│   │   ├── handlers/              # Extracción HTTP (Path, Query, Json, State) + llamadas a services
+│   │   │   ├── mod.rs
+│   │   │   ├── auth.rs
+│   │   │   ├── users.rs
+│   │   │   ├── rooms.rs
+│   │   │   ├── search.rs
+│   │   │   ├── chat.rs
+│   │   │   └── ai.rs
+│   │   ├── services/              # Reglas de negocio, licencias/permisos y concurrencia
+│   │   │   ├── mod.rs
+│   │   │   ├── auth_service.rs
+│   │   │   ├── room_service.rs    # Visibilidad, licencias de voto, delegación por dispositivo
+│   │   │   ├── playlist_service.rs# Concurrencia al reordenar/editar pistas
+│   │   │   ├── recommender.rs     # Recomendación ML (preferencias, likes, historial)
+│   │   │   ├── moderation.rs      # Moderación IA de textos (chat / nombres de sala)
+│   │   │   ├── llm.rs             # Cliente LLM con streaming
+│   │   │   └── spotify.rs         # Cliente externo de música (metadatos / búsqueda)
+│   │   └── ws/
+│   │       ├── mod.rs
+│   │       ├── hub.rs             # Gestión concurrente de salas y suscriptores + Redis Pub/Sub
+│   │       └── handler.rs         # Upgrade WS, envío/recepción de eventos en tiempo real
 │   ├── Cargo.toml
 │   ├── Cargo.lock
-│   └── Dockerfile              # Multi-stage build (cargo chef / builder -> imagen slim ligera)
-├── frontend/                   # React + TypeScript + Tailwind/CSS (Alejandro)
+│   └── Dockerfile                 # Multi-stage build limpio para producción
+├── frontend/
 │   ├── public/
 │   ├── src/
-│   │   ├── api/                # Clientes HTTP (Fetch/Axios) y gestor de WebSockets
-│   │   ├── components/         # UI reutilizable (reproductor, botones voto, modales, navbar)
-│   │   ├── context/            # AuthContext, SocketContext, PlayerContext
+│   │   ├── api/                   # Cliente HTTP configurable (env) + cliente WS/SSE
+│   │   ├── components/            # Componentes UI reutilizables (reproductor, votos, modales)
+│   │   ├── context/               # AuthContext, SocketContext, PlayerContext
 │   │   ├── pages/
-│   │   │   ├── auth/           # Login, Registro, Callback OAuth
-│   │   │   ├── rooms/          # Sala de votación en vivo, Editor playlist colaborativo
-│   │   │   ├── social/         # Chat, Perfil, Lista de amigos
-│   │   │   ├── ai/             # Panel de recomendaciones y asistente LLM streaming
-│   │   │   └── legal/          # Privacy Policy y Terms of Service (obligatorios 42)
-│   │   └── types/              # Contratos TypeScript sincronizados con structs Rust (ts-rs / OpenAPI)
+│   │   │   ├── auth/              # Login, registro, callback OAuth
+│   │   │   ├── rooms/             # Sala de votación en vivo + editor colaborativo de playlist
+│   │   │   ├── social/            # Amigos, perfiles, chat
+│   │   │   ├── ai/                # Recomendaciones + asistente LLM en streaming
+│   │   │   └── legal/             # Privacy Policy y Terms of Service reales
+│   │   ├── types/                 # Tipos TS alineados con las respuestas/eventos del backend
+│   │   └── App.tsx
 │   ├── package.json
 │   └── Dockerfile
-├── docker-compose.yml          # Levanta todo con un solo comando (obligatorio 42)
-├── Makefile                    # Atajos: make up, make down, make logs, make vault-init
-├── .env.example                # Plantilla de variables sin secretos
-└── README.md                   # Documentación completa en inglés (obligatoria 42)
-
+├── tests/                         # Pruebas de integración / carga / concurrencia (apoyo QA)
+├── docker-compose.yml             # Levanta todo el stack con un solo comando
+├── Makefile                       # Automatización de dependencias, build, run, lint, test
+├── .env.example                   # Plantilla de variables sin secretos reales
+└── README.md                      # Documentación completa en inglés en la raíz
 ```
-
 ---
 
 ### 3. Estrategia de Branches (Git Flow Simplificado)
