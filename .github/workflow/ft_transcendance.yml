@@ -1,0 +1,127 @@
+name: Docker Build & Smoke Test
+
+on:
+  pull_request:
+    branches: [ main, "feature/*", develop ]
+  push:
+    branches: [ main, "feature/*", develop ]
+
+jobs:
+  test-backend-dockerfile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain & cache
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
+      - name: Rust compilation check (backend + migration)
+        working-directory: ./backend
+        run: |
+          cargo check --workspace --all-targets
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          load: true
+          tags: music-room-backend:test
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Run MariaDB & smoke test backend container
+        env:
+          MYSQL_ROOT_PASSWORD: rootpassword
+          MYSQL_DATABASE: ft_transcendence
+          MYSQL_USER: rmarrero
+          MYSQL_PASSWORD: "12345"
+        run: |
+          docker network create test-net
+
+          docker run -d --name test-mariadb --network test-net \
+            -e MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PASSWORD" \
+            -e MYSQL_DATABASE="$MYSQL_DATABASE" \
+            -e MYSQL_USER="$MYSQL_USER" \
+            -e MYSQL_PASSWORD="$MYSQL_PASSWORD" \
+            mariadb:latest
+
+          echo "Esperando a MariaDB..."
+          for i in $(seq 1 30); do
+            if docker exec test-mariadb mysqladmin ping -h 127.0.0.1 -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" --silent; then
+              break
+            fi
+            sleep 2
+          done
+
+          docker run -d --name test-backend --network test-net \
+            -e APP_ENV=test \
+            -e SERVER_HOST=0.0.0.0 \
+            -e SERVER_PORT=3000 \
+            -e DATABASE_URL="mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@test-mariadb:3306/${MYSQL_DATABASE}" \
+            music-room-backend:test
+
+          sleep 3
+          docker logs test-backend
+
+          # Comprueba que el endpoint /api/health responda 200
+          docker run --rm --network test-net curlimages/curl:latest \
+            -fsS http://test-backend:3000/api/health | grep -q '"ok"'
+
+  test-frontend-dockerfile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Next.js compilation & type check
+        run: |
+          if [ ! -d "frontend" ]; then
+            echo "Carpeta ./frontend aún no existe; omitiendo check de Next.js."
+            exit 0
+          fi
+          cd frontend
+          npm ci
+          npx next typegen
+          npm run build
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build frontend Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          load: true
+          tags: music-room-frontend:test
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Smoke test frontend container
+        run: |
+          if ! docker image inspect music-room-frontend:test >/dev/null 2>&1; then
+            echo "Imagen music-room-frontend:test no construida; omitiendo smoke test."
+            exit 0
+          fi
+          docker run -d --name test-frontend -p 8080:80 music-room-frontend:test
+          sleep 2
+          docker logs test-frontend
+
+          curl -fsS http://127.0.0.1:8080/ | grep -qiE "<!doctype html|<html|root"
