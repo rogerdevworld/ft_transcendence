@@ -1,4 +1,4 @@
-name: Docker Build & Smoke Test
+name: CI - Processes & Docker
 
 on:
   pull_request:
@@ -7,13 +7,14 @@ on:
     branches: [ main, "feature/*", develop ]
 
 jobs:
-  test-backend-dockerfile:
+  # 1. Proceso de compilación de Rust (rápido, sin construir imagen)
+  rust-compile:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Rust toolchain & cache
+      - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Cargo dependencies
@@ -21,63 +22,68 @@ jobs:
         with:
           workspaces: backend
 
-      - name: Rust compilation check (backend + migration)
+      - name: Compile check workspace
         working-directory: ./backend
-        run: |
-          cargo check --workspace --all-targets
+        run: cargo check --workspace --all-targets
+
+  # 2. Proceso de build + smoke test de la imagen Docker del backend
+  backend-docker:
+    runs-on: ubuntu-latest
+    needs: rust-compile
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build backend Docker image
+      - name: Build backend image
         uses: docker/build-push-action@v6
         with:
           context: ./backend
           file: ./backend/Dockerfile
           load: true
           tags: music-room-backend:test
-          cache-from: type=gha,scope=backend
-          cache-to: type=gha,mode=max,scope=backend
+          cache-from: type=gha,scope=backend-img
+          cache-to: type=gha,mode=max,scope=backend-img
 
-      - name: Run MariaDB & smoke test backend container
+      - name: Smoke test backend with MariaDB
         env:
           MYSQL_ROOT_PASSWORD: rootpassword
           MYSQL_DATABASE: ft_transcendence
           MYSQL_USER: rmarrero
           MYSQL_PASSWORD: "12345"
         run: |
-          docker network create test-net
+          docker network create ci-backend-net
 
-          docker run -d --name test-mariadb --network test-net \
+          docker run -d --name ci-mariadb --network ci-backend-net \
             -e MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PASSWORD" \
             -e MYSQL_DATABASE="$MYSQL_DATABASE" \
             -e MYSQL_USER="$MYSQL_USER" \
             -e MYSQL_PASSWORD="$MYSQL_PASSWORD" \
             mariadb:latest
 
-          echo "Esperando a MariaDB..."
           for i in $(seq 1 30); do
-            if docker exec test-mariadb mysqladmin ping -h 127.0.0.1 -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" --silent; then
+            if docker exec ci-mariadb mysqladmin ping -h 127.0.0.1 -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" --silent; then
               break
             fi
             sleep 2
           done
 
-          docker run -d --name test-backend --network test-net \
+          docker run -d --name ci-backend --network ci-backend-net \
             -e APP_ENV=test \
             -e SERVER_HOST=0.0.0.0 \
             -e SERVER_PORT=3000 \
-            -e DATABASE_URL="mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@test-mariadb:3306/${MYSQL_DATABASE}" \
+            -e DATABASE_URL="mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@ci-mariadb:3306/${MYSQL_DATABASE}" \
             music-room-backend:test
 
           sleep 3
-          docker logs test-backend
+          docker logs ci-backend
+          docker run --rm --network ci-backend-net curlimages/curl:latest \
+            -fsS http://ci-backend:3000/api/health | grep -q '"ok"'
 
-          # Comprueba que el endpoint /api/health responda 200
-          docker run --rm --network test-net curlimages/curl:latest \
-            -fsS http://test-backend:3000/api/health | grep -q '"ok"'
-
-  test-frontend-dockerfile:
+  # 3. Proceso de compilación de Next.js (independiente del backend)
+  nextjs-compile:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -90,10 +96,10 @@ jobs:
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Next.js compilation & type check
+      - name: Typegen & build Next.js
         run: |
           if [ ! -d "frontend" ]; then
-            echo "Carpeta ./frontend aún no existe; omitiendo check de Next.js."
+            echo "Carpeta ./frontend aún no existe; omitiendo build de Next.js."
             exit 0
           fi
           cd frontend
@@ -101,18 +107,26 @@ jobs:
           npx next typegen
           npm run build
 
+  # 4. Proceso de build + smoke test de la imagen Docker del frontend
+  frontend-docker:
+    runs-on: ubuntu-latest
+    needs: nextjs-compile
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build frontend Docker image
+      - name: Build frontend image
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
           file: ./frontend/Dockerfile
           load: true
           tags: music-room-frontend:test
-          cache-from: type=gha,scope=frontend
-          cache-to: type=gha,mode=max,scope=frontend
+          cache-from: type=gha,scope=frontend-img
+          cache-to: type=gha,mode=max,scope=frontend-img
 
       - name: Smoke test frontend container
         run: |
@@ -120,8 +134,7 @@ jobs:
             echo "Imagen music-room-frontend:test no construida; omitiendo smoke test."
             exit 0
           fi
-          docker run -d --name test-frontend -p 8080:80 music-room-frontend:test
+          docker run -d --name ci-frontend -p 8080:80 music-room-frontend:test
           sleep 2
-          docker logs test-frontend
-
+          docker logs ci-frontend
           curl -fsS http://127.0.0.1:8080/ | grep -qiE "<!doctype html|<html|root"
