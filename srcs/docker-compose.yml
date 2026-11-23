@@ -1,0 +1,117 @@
+name: rmarrero/ft_transcendence:latest
+services:
+  mariadb:
+    container_name: mariadb
+    build:
+      context: ./requirements/mariadb
+    image: mariadb
+    restart: always
+    env_file:
+      - ../.env.example
+    volumes:
+      - db_data:/var/lib/mysql
+    networks:
+      - network
+
+  nginx:
+    container_name: nginx
+    build:
+      context: ./requirements/nginx
+    image: nginx
+    restart: always
+    ports:
+      - "443:443"
+    env_file:
+      - ../.env.example
+    networks:
+      - network
+
+  redis:
+    container_name: redis
+    build:
+      context: ./requirements/redis
+    image: redis
+    restart: always
+    networks:
+      - network
+
+  ftp:
+    container_name: ftp
+    build:
+      context: ./requirements/ftp
+    image: ftp
+    restart: always
+    env_file:
+      - ../.env.example
+    ports:
+      - "21:21"
+      - "21100-21110:21100-21110"
+    volumes:
+      - website_files:/var/www/html
+    networks:
+      - network
+
+  adminer:
+    container_name: adminer
+    build:
+      context: ./requirements/adminer
+    image: adminer
+    restart: always
+    depends_on:
+      - mariadb
+    ports:
+      - "8080:8080"
+    networks:
+      - network
+
+  cadvisor:
+    container_name: cadvisor
+    build:
+      context: ./requirements/cadvisor
+    image: cadvisor
+    restart: always
+    ports:
+      - "8082:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks:
+      - network
+
+  backend:
+      container_name: backend
+      build:
+        context: ../backend
+        dockerfile: Dockerfile
+      image: backend
+      environment:
+        DATABASE_URL: ${DATABASE_URL}
+      restart: always
+      env_file:
+        - ../.env.example
+      depends_on:
+        - mariadb
+        - redis
+      networks:
+        - network
+
+networks:
+  network:
+    driver: bridge
+
+volumes:
+  db_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${USER_DATA_PATH}/db_data
+  website_files:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${USER_DATA_PATH}/website_files
