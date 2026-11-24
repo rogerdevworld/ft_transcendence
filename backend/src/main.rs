@@ -4,6 +4,7 @@ mod entities;
 mod error;
 mod routes;
 mod state;
+mod users;
 
 use axum::Router;
 use migration::{Migrator, MigratorTrait};
@@ -48,8 +49,12 @@ async fn main() {
     let addr = config.bind_addr();
     let state = AppState::new(config, db);
 
+    let api_routes = Router::new()
+        .merge(routes::health::router())
+        .merge(crate::users::routes::routes());
+
     let app = Router::new()
-        .nest("/api", routes::health::router())
+        .nest("/api", api_routes)
         .with_state(state);
 
     let listener = match TcpListener::bind(&addr).await {
