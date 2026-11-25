@@ -5,6 +5,7 @@ mod error;
 mod routes;
 mod state;
 mod users;
+mod music_rooms;
 
 use axum::Router;
 use migration::{Migrator, MigratorTrait};
@@ -51,7 +52,8 @@ async fn main() {
 
     let api_routes = Router::new()
         .merge(routes::health::router())
-        .merge(crate::users::routes::routes());
+        .merge(crate::users::routes::routes())
+        .merge(crate::music_rooms::routes::routes());
 
     let app = Router::new()
         .nest("/api", api_routes)
