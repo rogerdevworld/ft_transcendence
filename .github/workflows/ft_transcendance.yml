@@ -102,7 +102,7 @@ jobs:
             echo "Carpeta ./frontend aún no existe; omitiendo build de Next.js."
             exit 0
           fi
-          cd frontend
+          cd ../frontend
           npm ci
           npx next typegen
           npm run build
