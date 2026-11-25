@@ -98,6 +98,8 @@ jobs:
 
       - name: Typegen & build Next.js
         run: |
+          ls -la
+          pwd
           cd ../frontend
           npm ci
           npx next typegen
