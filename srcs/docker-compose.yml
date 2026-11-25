@@ -11,7 +11,7 @@ services:
     volumes:
       - db_data:/var/lib/mysql
     networks:
-      - network
+      - music_rooms_net
 
   nginx:
     container_name: nginx
@@ -24,7 +24,7 @@ services:
     env_file:
       - ../.env.example
     networks:
-      - network
+      - music_rooms_net
 
   redis:
     container_name: redis
@@ -33,7 +33,7 @@ services:
     image: redis
     restart: always
     networks:
-      - network
+      - music_rooms_net
 
   ftp:
     container_name: ftp
@@ -49,7 +49,7 @@ services:
     volumes:
       - website_files:/var/www/html
     networks:
-      - network
+      - music_rooms_net
 
   adminer:
     container_name: adminer
@@ -62,7 +62,7 @@ services:
     ports:
       - "8080:8080"
     networks:
-      - network
+      - music_rooms_net
 
   cadvisor:
     container_name: cadvisor
@@ -79,7 +79,7 @@ services:
       - /var/lib/docker/:/var/lib/docker:ro
       - /dev/disk/:/dev/disk:ro
     networks:
-      - network
+      - music_rooms_net
 
   backend:
       container_name: backend
@@ -96,10 +96,21 @@ services:
         - mariadb
         - redis
       networks:
-        - network
+        - music_rooms_net
+
+  frontend:
+      build:
+        context: ../frontend
+        dockerfile: Dockerfile
+      container_name: frontend
+      restart: unless-stopped
+      expose:
+        - "3000"
+      networks:
+        - music_rooms_net
 
 networks:
-  network:
+  music_rooms_net:
     driver: bridge
 
 volumes:
