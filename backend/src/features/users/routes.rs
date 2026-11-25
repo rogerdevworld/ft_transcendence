@@ -4,15 +4,15 @@ use axum::{
 };
 
 use crate::{
-    music_rooms::handlers::{create, delete, get_by_id, list, update},
     state::AppState,
+    features::users::handlers::{create, delete, get_by_id, list, update},
 };
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/rooms", get(list).post(create))
+        .route("/users", get(list).post(create))
         .route(
-            "/rooms/{id}",
+            "/users/{id}",
             get(get_by_id).patch(update).delete(delete),
         )
 }

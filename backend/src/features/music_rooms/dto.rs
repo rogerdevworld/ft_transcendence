@@ -23,3 +23,26 @@ pub struct RoomResponse {
     pub visibility: String,
     pub vote_license: String,
 }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct QueuedTrack {
+    pub track_id: i64,
+    pub votes: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EnqueueTrackRequest {
+    pub track_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VoteTrackRequest {
+    pub user_id: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VoteResponse {
+    pub track_id: i64,
+    pub voted: bool,
+    pub votes: i64,
+}

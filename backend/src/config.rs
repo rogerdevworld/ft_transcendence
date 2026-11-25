@@ -6,6 +6,7 @@ pub struct Config {
     pub port: u16,
     pub app_env: String,
     pub database_url: String,
+    pub redis_url: String,
 }
 
 impl Config {
@@ -22,6 +23,8 @@ impl Config {
         let database_url = env::var("DATABASE_URL")
             .map_err(|_| String::from("Not found environment variable: DATABASE_URL"))?;
 
+        let redis_url = env::var("REDIS_URL")
+            .map_err(|_| String::from("Not found environment variable: REDIS_URL"))?;
         tracing::debug!("DATABASE_URL cargada correctamente");
 
         Ok(Self {
@@ -29,6 +32,7 @@ impl Config {
             port,
             app_env,
             database_url,
+            redis_url,
         })
     }
 

@@ -4,11 +4,17 @@ mod entities;
 mod error;
 mod routes;
 mod state;
-mod users;
-mod music_rooms;
+mod features;
+// mod health;
+// mod users;
+// mod music_rooms;
+// mod media_delivery;
+// mod tracks;
+// mod live_streams;
 
 use axum::Router;
-use migration::{Migrator, MigratorTrait};
+use migration::Migrator;
+use sea_orm_migration::prelude::MigratorTrait;
 use sea_orm::Database;
 use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -48,12 +54,33 @@ async fn main() {
     }
 
     let addr = config.bind_addr();
-    let state = AppState::new(config, db);
+    // let config = Config::from_env().expect("Error cargando configuración");
+
+    let db = Database::connect(&config.database_url)
+        .await
+        .expect("Error conectando a MariaDB");
+
+    Migrator::up(&db, None)
+        .await
+        .expect("Error ejecutando migraciones");
+
+    let redis_client = redis::Client::open(config.redis_url.as_str())
+        .expect("URL de Redis inválida");
+
+    let redis_conn = redis::aio::ConnectionManager::new(redis_client)
+        .await
+        .expect("Error conectando a Redis");
+
+    let ws_hub = crate::features::music_rooms::RoomHub::new();
+
+    let state = AppState::new(config, db, redis_conn, ws_hub);
 
     let api_routes = Router::new()
         .merge(routes::health::router())
-        .merge(crate::users::routes::routes())
-        .merge(crate::music_rooms::routes::routes());
+        .merge(crate::features::users::routes::routes())
+        .merge(crate::features::music_rooms::routes::routes())
+        .merge(crate::features::media_delivery::routes::routes())
+        .merge(crate::features::tracks::routes::routes());
 
     let app = Router::new()
         .nest("/api", api_routes)

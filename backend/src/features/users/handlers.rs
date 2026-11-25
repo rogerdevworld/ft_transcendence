@@ -8,7 +8,7 @@ use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 use crate::{
     error::AppError,
     state::AppState,
-    users::{
+    features::users::{
         dto::{CreateUserDto, UpdateUserDto, UserResponse},
         model::{self, Entity as User},
     },
