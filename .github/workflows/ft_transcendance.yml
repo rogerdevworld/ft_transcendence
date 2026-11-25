@@ -98,10 +98,6 @@ jobs:
 
       - name: Typegen & build Next.js
         run: |
-          if [ ! -d "frontend" ]; then
-            echo "Carpeta ./frontend aún no existe; omitiendo build de Next.js."
-            exit 0
-          fi
           cd ../frontend
           npm ci
           npx next typegen
