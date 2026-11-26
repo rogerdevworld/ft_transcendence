@@ -14,8 +14,50 @@ use tokio::{
 use crate::{
     entities::track_asset::{Column as AssetColumn, Entity as TrackAsset},
     error::AppError,
+    features::catalog::dto::VideoChunkDto,
     state::AppState,
 };
+
+async fn read_file_slice(
+    file_path: &str,
+    start: u64,
+    length: usize,
+) -> Result<Vec<u8>, AppError> {
+    let mut file = File::open(file_path)
+        .await
+        .map_err(|_| AppError::NotFound("Archivo no encontrado en disco".to_string()))?;
+
+    file.seek(SeekFrom::Start(start))
+        .await
+        .map_err(|_| AppError::BadRequest("Error haciendo seek en el archivo".to_string()))?;
+
+    let mut buffer = vec![0u8; length];
+    file.read_exact(&mut buffer)
+        .await
+        .map_err(|_| AppError::BadRequest("Error leyendo bytes del archivo".to_string()))?;
+
+    Ok(buffer)
+}
+
+pub fn build_chunk_metadata(
+    file_size: u64,
+    chunk_size: u64,
+    total_chunks: u64,
+) -> Vec<VideoChunkDto> {
+    (0..total_chunks)
+        .map(|index| {
+            let offset = index * chunk_size;
+            let remaining = file_size.saturating_sub(offset);
+            let size = remaining.min(chunk_size);
+            VideoChunkDto {
+                index,
+                offset,
+                size,
+                hash: None,
+            }
+        })
+        .collect()
+}
 
 // GET /api/tracks/{id}/chunks/{index}
 pub async fn get_chunk(
@@ -44,18 +86,7 @@ pub async fn get_chunk(
     let remaining = (asset.file_size as u64).saturating_sub(offset);
     let to_read = remaining.min(asset.chunk_size as u64) as usize;
 
-    let mut file = File::open(&asset.file_path)
-        .await
-        .map_err(|_| AppError::NotFound("Archivo no encontrado en disco".to_string()))?;
-
-    file.seek(SeekFrom::Start(offset))
-        .await
-        .map_err(|_| AppError::BadRequest("Error haciendo seek en el archivo".to_string()))?;
-
-    let mut buffer = vec![0u8; to_read];
-    file.read_exact(&mut buffer)
-        .await
-        .map_err(|_| AppError::BadRequest("Error leyendo bytes del chunk".to_string()))?;
+    let buffer = read_file_slice(&asset.file_path, offset, to_read).await?;
 
     let mut res = Response::new(Body::from(buffer));
     *res.status_mut() = StatusCode::OK;
@@ -63,6 +94,10 @@ pub async fn get_chunk(
         header::CONTENT_TYPE,
         HeaderValue::from_str(&asset.mime_type)
             .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+    res.headers_mut().insert(
+        header::ACCEPT_RANGES,
+        HeaderValue::from_static("bytes"),
     );
     res.headers_mut().insert(
         header::HeaderName::from_static("x-chunk-index"),
@@ -103,34 +138,38 @@ pub async fn stream_range(
         let bytes_part = range_str
             .strip_prefix("bytes=")
             .ok_or_else(|| AppError::BadRequest("Cabecera Range inválida".to_string()))?;
-        let mut parts = bytes_part.split('-');
-        let start: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-        let end: u64 = parts
-            .next()
-            .and_then(|s| if s.is_empty() { None } else { s.parse().ok() })
-            .unwrap_or_else(|| (start + 1_048_575).min(total_size - 1));
 
-        if start >= total_size || end >= total_size || start > end {
-            return Ok(StatusCode::RANGE_NOT_SATISFIABLE.into_response());
+        if let Some(suffix) = bytes_part.strip_prefix('-') {
+            let suffix_len: u64 = suffix
+                .parse()
+                .map_err(|_| AppError::BadRequest("Rango de sufijo inválido".to_string()))?;
+            if suffix_len == 0 {
+                return Ok(StatusCode::RANGE_NOT_SATISFIABLE.into_response());
+            }
+            let start = total_size.saturating_sub(suffix_len);
+            (start, total_size - 1)
+        } else {
+            let mut parts = bytes_part.split('-');
+            let start: u64 = parts
+                .next()
+                .and_then(|s| if s.is_empty() { None } else { s.parse().ok() })
+                .ok_or_else(|| AppError::BadRequest("Rango inicial inválido".to_string()))?;
+            let end: u64 = parts
+                .next()
+                .and_then(|s| if s.is_empty() { None } else { s.parse().ok() })
+                .unwrap_or_else(|| (start + 1_048_575).min(total_size - 1));
+
+            if start >= total_size || end >= total_size || start > end {
+                return Ok(StatusCode::RANGE_NOT_SATISFIABLE.into_response());
+            }
+            (start, end)
         }
-        (start, end)
     } else {
         (0, (1_048_575).min(total_size - 1))
     };
 
     let length = (end - start + 1) as usize;
-    let mut file = File::open(&asset.file_path)
-        .await
-        .map_err(|_| AppError::NotFound("Archivo no encontrado en disco".to_string()))?;
-
-    file.seek(SeekFrom::Start(start))
-        .await
-        .map_err(|_| AppError::BadRequest("Error haciendo seek en el archivo".to_string()))?;
-
-    let mut buffer = vec![0u8; length];
-    file.read_exact(&mut buffer)
-        .await
-        .map_err(|_| AppError::BadRequest("Error leyendo rango del archivo".to_string()))?;
+    let buffer = read_file_slice(&asset.file_path, start, length).await?;
 
     let content_range = format!("bytes {}-{}/{}", start, end, total_size);
     let mut res = Response::new(Body::from(buffer));

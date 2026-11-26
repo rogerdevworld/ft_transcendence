@@ -7,19 +7,46 @@ use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 
 use crate::{
     error::AppError,
-    state::AppState,
-    features::users::{
-        dto::{CreateUserDto, UpdateUserDto, UserResponse},
-        model::{self, Entity as User},
+    features::{
+        catalog::dto::{parse_images, serialize_images, ImageObject, UserRole},
+        users::{
+            dto::{CreateUserDto, UpdateUserDto, UserResponse},
+            model::{self, Entity as User},
+        },
     },
+    state::AppState,
 };
 
+fn role_to_db(role: &UserRole) -> String {
+    match role {
+        UserRole::Listener => "listener".to_string(),
+        other => format!("{other:?}").to_lowercase(),
+    }
+}
+
+fn role_from_db(raw: &str) -> UserRole {
+    match raw.trim().to_lowercase().as_str() {
+        "listener" | "user" => UserRole::Listener,
+        "admin" => UserRole::Admin,
+        "creator" | "artist" => UserRole::Creator,
+        _ => UserRole::Listener,
+    }
+}
+
 fn to_response(user: model::Model) -> UserResponse {
+    let role = role_from_db(&user.role);
+    let images = parse_images(&user.images);
+
     UserResponse {
         id: user.id,
         email: user.email,
         display_name: user.display_name,
+        role,
         subscription_plan: user.subscription_plan,
+        country: user.country,
+        images,
+        followers_total: 0,
+        uri: format!("app:user:{}", user.id),
     }
 }
 
@@ -30,9 +57,15 @@ pub async fn create(
 ) -> Result<(StatusCode, Json<UserResponse>), AppError> {
     let email = payload.email.trim().to_lowercase();
     let display_name = payload.display_name.trim().to_string();
+    let password = payload.password.trim().to_string();
 
     if email.is_empty() || !email.contains('@') {
         return Err(AppError::BadRequest("El email no es válido".to_string()));
+    }
+    if password.is_empty() {
+        return Err(AppError::BadRequest(
+            "La contraseña (password) es obligatoria".to_string(),
+        ));
     }
     if display_name.is_empty() {
         return Err(AppError::BadRequest(
@@ -40,17 +73,26 @@ pub async fn create(
         ));
     }
 
+    let role = payload.role.unwrap_or(UserRole::Listener);
     let plan = payload
         .subscription_plan
         .map(|p| p.trim().to_uppercase())
         .filter(|p| !p.is_empty())
         .unwrap_or_else(|| "FREE".to_string());
+    let country = payload
+        .country
+        .map(|c| c.trim().to_uppercase())
+        .filter(|c| !c.is_empty());
+    let images_json = serialize_images(&payload.images);
 
     let new_user = model::ActiveModel {
         email: Set(email),
-        password_hash: Set(payload.password),
+        password_hash: Set(Some(password)),
         display_name: Set(display_name),
+        role: Set(role_to_db(&role)),
         subscription_plan: Set(plan),
+        country: Set(country),
+        images: Set(images_json),
         ..Default::default()
     };
 
@@ -61,7 +103,8 @@ pub async fn create(
 // GET /api/users
 pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<UserResponse>>, AppError> {
     let users = User::find().all(&state.db).await?;
-    Ok(Json(users.into_iter().map(to_response).collect()))
+    let items = users.into_iter().map(to_response).collect();
+    Ok(Json(items))
 }
 
 // GET /api/users/{id}
@@ -108,6 +151,19 @@ pub async fn update(
             ));
         }
         active.subscription_plan = Set(normalized);
+    }
+
+    if let Some(country) = payload.country {
+        let normalized = country.trim().to_uppercase();
+        active.country = Set(if normalized.is_empty() {
+            None
+        } else {
+            Some(normalized)
+        });
+    }
+
+    if let Some(images) = payload.images {
+        active.images = Set(serialize_images(&Some(images)));
     }
 
     let updated = active.update(&state.db).await?;

@@ -23,6 +23,9 @@ pub enum AppError {
 
     #[error("Error interno del servidor")]
     Internal(String),
+
+    #[error("Acceso prohibido: {0}")]
+    Forbidden(String),
 }
 
 #[derive(Serialize)]
@@ -57,6 +60,7 @@ impl IntoResponse for AppError {
                     String::from("occurred an internal error"),
                 )
             }
+            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, "FORBIDDEN", msg.clone()),
         };
 
         let body = Json(ErrorBody {

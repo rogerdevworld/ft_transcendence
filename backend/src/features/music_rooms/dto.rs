@@ -46,3 +46,10 @@ pub struct VoteResponse {
     pub voted: bool,
     pub votes: i64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NowPlaying {
+    pub track_id: i64,
+    pub started_at_ms: i64,
+    pub is_playing: bool,
+}

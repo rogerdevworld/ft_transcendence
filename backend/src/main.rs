@@ -5,12 +5,6 @@ mod error;
 mod routes;
 mod state;
 mod features;
-// mod health;
-// mod users;
-// mod music_rooms;
-// mod media_delivery;
-// mod tracks;
-// mod live_streams;
 
 use axum::Router;
 use migration::Migrator;
@@ -18,7 +12,10 @@ use sea_orm_migration::prelude::MigratorTrait;
 use sea_orm::Database;
 use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use crate::features::auth;
+use crate::features::webrtc_signaling;
 
+use crate::features::music_rooms::handlers::create;
 use crate::{config::Config, state::AppState};
 
 #[tokio::main]
@@ -80,7 +77,10 @@ async fn main() {
         .merge(crate::features::users::routes::routes())
         .merge(crate::features::music_rooms::routes::routes())
         .merge(crate::features::media_delivery::routes::routes())
-        .merge(crate::features::tracks::routes::routes());
+        .merge(crate::features::tracks::routes::routes())
+        .merge(crate::features::admin::routes::routes())
+        .merge(crate::features::webrtc_signaling::routes::routes())
+        .merge(auth::routes::routes());
 
     let app = Router::new()
         .nest("/api", api_routes)

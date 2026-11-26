@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-axum = { version = "0.8.9", features = ["ws"] }
+axum = { version = "0.8.9", features = ["ws", "multipart"] }
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -22,6 +22,11 @@ sea-orm = { version = "2.0.4", features = [
 ] }
 chrono = { version = "0.4", features = ["serde"] }
 migration = { path = "migration" }
+rand = { version = "0.10.4"}
+jsonwebtoken = { version = "12.0.0" }
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.11.2"
+hex = "0.4"
 sea-orm-migration = { version = "2.0.4", features = [
     "sqlx-mysql",
     "runtime-tokio-rustls",

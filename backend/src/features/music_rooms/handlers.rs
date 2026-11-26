@@ -17,11 +17,12 @@ use crate::{
             self, RoomWsEvent,
             dto::{
                 CreateRoomDto, EnqueueTrackRequest, QueuedTrack, RoomResponse, UpdateRoomDto,
-                VoteResponse, VoteTrackRequest, 
+                VoteResponse, VoteTrackRequest, NowPlaying 
             },
             model::{self, normalize_visibility, normalize_vote_license, Entity as MusicRoom},
         },
         users::model::Entity as User,
+        webrtc_signaling::dto::SignalMessage,
     },
     state::AppState,
 };
@@ -215,8 +216,13 @@ async fn handle_socket(socket: WebSocket, room_id: i64, mut state: AppState) {
     let current_queue = music_rooms::get_queue(&mut state.redis, room_id)
         .await
         .unwrap_or_default();
+
+    let current_now_playing = music_rooms::get_now_playing(&mut state.redis, room_id)
+        .await
+        .unwrap_or(None);
     let snapshot = RoomWsEvent::RoomSnapshot {
         room_id,
+        now_playing: current_now_playing,
         queue: current_queue,
     };
 
@@ -240,7 +246,7 @@ async fn handle_socket(socket: WebSocket, room_id: i64, mut state: AppState) {
         while let Some(Ok(msg)) = ws_receiver.next().await {
             match msg {
                 Message::Text(text) => {
-                    tracing::debug!(room_id, %text, "Mensaje recibido por WS");
+                    tracing::debug!(room_id, %text, "Message received from client");
                 }
                 Message::Close(_) => break,
                 _ => {}
@@ -254,4 +260,29 @@ async fn handle_socket(socket: WebSocket, room_id: i64, mut state: AppState) {
     }
 
     state.ws_hub.publish(room_id, RoomWsEvent::MemberLeft { room_id });
+}
+
+// POST /api/rooms/{id}/next
+pub async fn next_track_handler(
+    Path(room_id): Path<i64>,
+    State(mut state): State<AppState>,
+) -> Result<Json<Option<NowPlaying>>, (StatusCode, String)> {
+    let now_playing = music_rooms::advance_to_top_voted_track(&mut state.redis, room_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let queue = music_rooms::get_queue(&mut state.redis, room_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    state.ws_hub.publish(
+        room_id,
+        RoomWsEvent::NowPlayingChanged {
+            room_id,
+            now_playing: now_playing.clone(),
+            queue,
+        },
+    );
+
+    Ok(Json(now_playing))
 }

@@ -5,7 +5,8 @@ use redis::AsyncCommands;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use crate::features::music_rooms::dto::QueuedTrack;
+use crate::features::music_rooms::dto::{ QueuedTrack, NowPlaying};
+use crate::features::webrtc_signaling::dto::SignalMessage;
 
 pub mod dto;
 pub mod handlers;
@@ -15,11 +16,12 @@ pub mod routes;
 const ROOM_CHANNEL_CAPACITY: usize = 256;
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", content = "payload")]
+#[serde(tag = "event", rename_all = "snake_case")]
 pub enum RoomWsEvent {
     #[serde(rename = "room_snapshot")]
     RoomSnapshot {
         room_id: i64,
+        now_playing: Option<NowPlaying>,
         queue: Vec<QueuedTrack>,
     },
     #[serde(rename = "member_joined")]
@@ -40,6 +42,13 @@ pub enum RoomWsEvent {
         voted: bool,
         votes: i64,
     },
+    #[serde(rename = "now_playing_changed")]
+    NowPlayingChanged {
+        room_id: i64,
+        now_playing: Option<NowPlaying>,
+        queue: Vec<QueuedTrack>,
+    },
+    WebrtcSignal(SignalMessage),
 }
 
 #[derive(Clone, Default)]
@@ -52,6 +61,9 @@ impl RoomHub {
         Self::default()
     }
 
+    pub fn send_webrtc_signal(&self, room_id: i64, signal: SignalMessage) {
+        self.publish(room_id, RoomWsEvent::WebrtcSignal(signal));
+    }
     pub fn subscribe(&self, room_id: i64) -> broadcast::Receiver<String> {
         let sender = {
             let mut guard = self.channels.write().expect("RoomHub lock poisoned");
@@ -152,4 +164,57 @@ pub async fn toggle_vote_in_redis(
     };
     let new_score: f64 = conn.zincr(&q_key, &member, delta as f64).await?;
     Ok((voted, new_score as i64))
+}
+
+fn now_playing_key(room_id: i64) -> String {
+    format!("room:{room_id}:now_playing")
+}
+
+pub async fn get_now_playing(
+    conn: &mut redis::aio::ConnectionManager,
+    room_id: i64,
+) -> Result<Option<crate::features::music_rooms::dto::NowPlaying>, redis::RedisError> {
+    let raw: Option<String> = conn.get(now_playing_key(room_id)).await?;
+    match raw {
+        Some(json) => Ok(serde_json::from_str(&json).ok()),
+        None => Ok(None),
+    }
+}
+
+pub async fn set_now_playing(
+    conn: &mut redis::aio::ConnectionManager,
+    room_id: i64,
+    now_playing: &crate::features::music_rooms::dto::NowPlaying,
+) -> Result<(), redis::RedisError> {
+    let json = serde_json::to_string(now_playing).unwrap_or_default();
+    let _: () = conn.set(now_playing_key(room_id), json).await?;
+    Ok(())
+}
+
+pub async fn advance_to_top_voted_track(
+    conn: &mut redis::aio::ConnectionManager,
+    room_id: i64,
+) -> Result<Option<crate::features::music_rooms::dto::NowPlaying>, redis::RedisError> {
+    let popped: Vec<(String, f64)> = redis::cmd("ZPOPMAX")
+        .arg(queue_key(room_id))
+        .arg(1_i64)
+        .query_async(conn)
+        .await?;
+
+    let Some((member, _score)) = popped.into_iter().next() else {
+        return Ok(None);
+    };
+
+    let Ok(track_id) = member.parse::<i64>() else {
+        return Ok(None);
+    };
+    let _: i64 = conn.del(voters_key(room_id, track_id)).await?;
+    let now_playing = crate::features::music_rooms::dto::NowPlaying {
+        track_id,
+        started_at_ms: chrono::Utc::now().timestamp_millis(),
+        is_playing: true,
+    };
+
+    set_now_playing(conn, room_id, &now_playing).await?;
+    Ok(Some(now_playing))
 }
