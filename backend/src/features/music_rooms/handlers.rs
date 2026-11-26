@@ -87,6 +87,7 @@ pub async fn get_by_id(
     Ok(Json(to_response(found)))
 }
 
+
 // PATCH /api/rooms/{id}
 pub async fn update(
     State(state): State<AppState>,
